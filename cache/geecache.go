@@ -1,12 +1,11 @@
 package cache
 
 import (
-	"DistributedCache/cache/consistenthash"
+	pb "DistributedCache/cache/cachepb"
+	"DistributedCache/cache/singleflight"
 	"fmt"
 	"log"
 	"sync"
-
-	"DistributedCache/cache/singleflight"
 )
 
 type GetterFunc func(key string) ([]byte, error)
@@ -21,7 +20,12 @@ type Group struct {
 	name      string
 	getter    Getter
 	mainCache cache
-	peers     consistenthash.PeerPicker
+	
+	// http version
+	// peers     consistenthash.PeerPicker
+
+	// rpc version
+	peers     PeerPicker
 	// use singleflight.Group to make sure that
 	// each key is only fetched once
 	loader *singleflight.Group
@@ -92,8 +96,40 @@ func (g *Group) populateCache(key string, value ByteView) {
 	g.mainCache.add(key, value)
 }
 
+// http version
+// // RegisterPeers registers a PeerPicker for choosing remote peer
+// func (g *Group) RegisterPeers(peers consistenthash.PeerPicker) {
+// 	if g.peers != nil {
+// 		panic("RegisterPeerPicker called more than once")
+// 	}
+// 	g.peers = peers
+// }
+
+// func (g *Group) load(key string) (value ByteView, err error) {
+// 	// each key is only fetched once (either locally or remotely)
+// 	// regardless of the number of concurrent callers.
+// 	viewi, err := g.loader.Do(key, func() (interface{}, error) {
+// 		if g.peers != nil {
+// 			if peer, ok := g.peers.PickPeer(key); ok {
+// 				if value, err = g.getFromPeer(peer, key); err == nil {
+// 					return value, nil
+// 				}
+// 				log.Println("[GeeCache] Failed to get from peer", err)
+// 			}
+// 		}
+
+// 		return g.getLocally(key)
+// 	})
+
+// 	if err == nil {
+// 		return viewi.(ByteView), nil
+// 	}
+// 	return
+// }
+
+// rpc version
 // RegisterPeers registers a PeerPicker for choosing remote peer
-func (g *Group) RegisterPeers(peers consistenthash.PeerPicker) {
+func (g *Group) RegisterPeers(peers PeerPicker) {
 	if g.peers != nil {
 		panic("RegisterPeerPicker called more than once")
 	}
@@ -122,10 +158,25 @@ func (g *Group) load(key string) (value ByteView, err error) {
 	return
 }
 
-func (g *Group) getFromPeer(peer consistenthash.PeerGetter, key string) (ByteView, error) {
-	bytes, err := peer.Get(g.name, key)
+// http version
+// func (g *Group) getFromPeer(peer consistenthash.PeerGetter, key string) (ByteView, error) {
+// 	bytes, err := peer.Get(g.name, key)
+// 	if err != nil {
+// 		return ByteView{}, err
+// 	}
+// 	return ByteView{b: bytes}, nil
+// }
+
+// rpc version
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+	req := &pb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	res := &pb.Response{}
+	err := peer.Get(req, res)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{b: bytes}, nil
+	return ByteView{b: res.Value}, nil
 }
